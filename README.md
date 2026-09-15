@@ -5,7 +5,7 @@ Welcome to **LeafScan**, a production-ready Machine Learning pipeline built from
 This project trains a state-of-the-art Convolutional Neural Network to correctly identify 38 different plant conditions (including healthy leaves and various diseases) from a single photo.
 
 ## 🚀 Performance
-The checkpoint shipped on the `deploy/digitalocean-live` branch achieves **90.2% validation accuracy**, trained via transfer learning on a ResNet50 backbone with a custom training head. It was trained on a balanced 100-image-per-class subset of the [PlantVillage dataset](https://github.com/spMohanty/PlantVillage-Dataset) (3,800 train / 950 validation images across the 38 classes) so the model can be reproduced and redeployed quickly; training on the full dataset (~54k images) will push accuracy higher at the cost of a much longer training run.
+The checkpoint shipped on the `deploy/digitalocean-live` branch achieves **96.86% validation accuracy** (validation loss 0.0925), trained via transfer learning on a ResNet50 backbone with a custom training head on the **full** [PlantVillage dataset](https://github.com/spMohanty/PlantVillage-Dataset) `raw/color` split — 54,305 images across all 38 classes, stratified 85/15 into 46,159 training / 8,146 validation images with no overlap between the two. Training used the existing `src/train.py` pipeline unmodified (frozen ResNet50 backbone, Adam, ReduceLROnPlateau, early stopping) and ran the full 30 epochs configured in `config.py`; the best checkpoint (by validation accuracy and, independently, lowest validation loss) came from **epoch 28**.
 
 ## 🏗 System Architecture
 This project enforces a strict Separation of Concerns, completely isolating the Neural Network calculations from the Web Server API. 
