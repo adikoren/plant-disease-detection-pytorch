@@ -5,7 +5,7 @@ Welcome to **LeafScan**, a production-ready Machine Learning pipeline built from
 This project trains a state-of-the-art Convolutional Neural Network to correctly identify 38 different plant conditions (including healthy leaves and various diseases) from a single photo.
 
 ## 🚀 Performance
-The model achieves **96.8% validation accuracy** through rigorous transfer learning, utilizing a ResNet50 backbone with a custom training head, Automatic Mixed Precision (AMP), and dynamic learning rate scheduling.
+The checkpoint shipped on the `deploy/digitalocean-live` branch achieves **90.2% validation accuracy**, trained via transfer learning on a ResNet50 backbone with a custom training head. It was trained on a balanced 100-image-per-class subset of the [PlantVillage dataset](https://github.com/spMohanty/PlantVillage-Dataset) (3,800 train / 950 validation images across the 38 classes) so the model can be reproduced and redeployed quickly; training on the full dataset (~54k images) will push accuracy higher at the cost of a much longer training run.
 
 ## 🏗 System Architecture
 This project enforces a strict Separation of Concerns, completely isolating the Neural Network calculations from the Web Server API. 
@@ -41,4 +41,23 @@ python src/train.py
 To recalculate Precision, Recall, and the 38x38 Confusion Matrix heatmap on the validation dataset:
 ```bash
 python src/evaluate.py
+```
+
+---
+
+## 🚢 Deployment (DigitalOcean App Platform)
+
+The `deploy/digitalocean-live` branch is ready to deploy as-is: it ships a trained `experiments/best_model.pth` (tracked via [Git LFS](https://git-lfs.com), see below), a `Dockerfile`, and a `.do/app.yaml` App Platform spec.
+
+### Deploy
+1. Install the Git LFS filter once locally if you plan to clone/push this branch: `git lfs install`.
+2. In the DigitalOcean control panel: **Create → Apps → GitHub → adikoren/plant-disease-detection-pytorch**, branch `deploy/digitalocean-live`. App Platform detects the `Dockerfile` automatically.
+   - Or from the CLI: `doctl apps create --spec .do/app.yaml`.
+3. First deploy takes a few minutes (CPU-only PyTorch install + baking in ImageNet weights at build time). Once live, the health check hits `/health`, and the app is served at `/` (Gradio UI is mounted at `/ui`, the REST API at `/predict`, Swagger docs at `/docs`).
+
+### Run locally with Docker
+```bash
+docker build -t leafscan .
+docker run -p 8000:8000 leafscan
+# open http://localhost:8000/ui
 ```
