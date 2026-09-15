@@ -47,13 +47,25 @@ python src/evaluate.py
 
 ## 🚢 Deployment (DigitalOcean App Platform)
 
-The `deploy/digitalocean-live` branch is ready to deploy as-is: it ships a trained `experiments/best_model.pth` (tracked via [Git LFS](https://git-lfs.com), see below), a `Dockerfile`, and a `.do/app.yaml` App Platform spec.
+The `deploy/digitalocean-live` branch is ready to deploy as-is: it ships a trained `experiments/best_model.pth` (tracked via [Git LFS](https://git-lfs.com)), a `Dockerfile`, and a `.do/app.yaml` App Platform spec.
+
+### Checkpoint delivery — why the Dockerfile downloads the checkpoint instead of `COPY`ing it
+**DigitalOcean App Platform's own git fetch of this repo does not resolve Git LFS.** If the Dockerfile just did `COPY experiments/ experiments/`, the image would silently end up with the ~130-byte LFS *pointer* text instead of the real ~108MB weights — `torch.load()` on that pointer fails with a cryptic `UnpicklingError`, which used to crash the app on startup before it could bind its port (health checks then fail with "connection refused" and the deploy is killed).
+
+The fix: the `Dockerfile` downloads `best_model.pth` directly over plain HTTPS from **GitHub's LFS media endpoint** (`media.githubusercontent.com`), which serves the real LFS object content regardless of whether the fetching tool understands LFS — no DO-specific config, no extra storage account, no secrets, and it stays in sync automatically since it pulls from whatever's currently pushed to `deploy/digitalocean-live`:
+```
+https://media.githubusercontent.com/media/adikoren/plant-disease-detection-pytorch/deploy/digitalocean-live/experiments/best_model.pth
+```
+Right after downloading, the build calls `validate_checkpoint_file()` (`src/utils.py`) and **fails the build loudly** if the file is missing, under 10MB (an LFS pointer is ~130 bytes; a real checkpoint is 100MB+), or still literally starts with the LFS pointer header — so a broken checkpoint is caught at build time, not as a silent runtime crash. The same check also runs at app startup (`app/main.py`'s lifespan), and any load failure now logs the full traceback and serves in a degraded (no-predictions) state instead of crashing the ASGI process outright.
+
+Class names are similarly decoupled from the dataset: `experiments/class_names.json` (small, plain git, not LFS) is the deployable source of truth for the 38 class labels, since `data/` (the training set) is intentionally never shipped to production.
+
+If you ever need to point at a different checkpoint, override the build arg: `docker build --build-arg CHECKPOINT_URL=<url> -t leafscan .` (and set the same in `.do/app.yaml` if deploying that way).
 
 ### Deploy
-1. Install the Git LFS filter once locally if you plan to clone/push this branch: `git lfs install`.
-2. In the DigitalOcean control panel: **Create → Apps → GitHub → adikoren/plant-disease-detection-pytorch**, branch `deploy/digitalocean-live`. App Platform detects the `Dockerfile` automatically.
+1. In the DigitalOcean control panel: **Create → Apps → GitHub → adikoren/plant-disease-detection-pytorch**, branch `deploy/digitalocean-live`. App Platform detects the `Dockerfile` automatically.
    - Or from the CLI: `doctl apps create --spec .do/app.yaml`.
-3. First deploy takes a few minutes (CPU-only PyTorch install + baking in ImageNet weights at build time). Once live, the health check hits `/health`, and the app is served at `/` (Gradio UI is mounted at `/ui`, the REST API at `/predict`, Swagger docs at `/docs`).
+2. First deploy takes a few minutes (CPU-only PyTorch install, downloading the checkpoint, and baking in ImageNet weights at build time). Once live, the health check hits `/health`, and the app is served at `/` (Gradio UI is mounted at `/ui`, the REST API at `/predict`, Swagger docs at `/docs`).
 
 ### Run locally with Docker
 ```bash
@@ -61,3 +73,4 @@ docker build -t leafscan .
 docker run -p 8000:8000 leafscan
 # open http://localhost:8000/ui
 ```
+(Docker fetches the real checkpoint itself at build time — no Git LFS setup needed just to build/run the image. You only need `git lfs install` locally if you want `experiments/best_model.pth` to contain the real weights after a plain `git clone`, e.g. to run `python app/main.py` outside Docker.)

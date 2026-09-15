@@ -21,6 +21,11 @@ TEST_DIR  = os.path.join(DATA_DIR, "test")
 
 CHECKPOINT_DIR  = os.path.join(BASE_DIR, "experiments")
 BEST_MODEL_PATH = os.path.join(CHECKPOINT_DIR, "best_model.pth")
+# WHY a sidecar file: TRAIN_DIR (the dataset) is intentionally never shipped to
+# production — it's gitignored and excluded from the Docker build. This small
+# JSON file is the deployable source of truth for the class order the
+# checkpoint was trained with, so serving never depends on the dataset being present.
+CLASS_NAMES_PATH = os.path.join(CHECKPOINT_DIR, "class_names.json")
 LOG_FILE        = os.path.join(CHECKPOINT_DIR, "training.log")
 
 # ---------------------------------------------------------------------------

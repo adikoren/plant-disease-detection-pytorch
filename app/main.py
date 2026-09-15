@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from app.schemas import HealthResponse, PredictionResponse, Top3Prediction
 from src.inference import load_model, predict
-from src.utils import get_device, setup_logging
+from src.utils import get_class_names, get_device, setup_logging
 
 
 @asynccontextmanager
@@ -50,17 +50,26 @@ async def lifespan(app: FastAPI):
         # Store on app.state so all endpoints can access without global variables
         app.state.model       = model
         app.state.device      = device
-        # WHY hardcode class_names from dataset on startup: avoids reloading the
-        # full ImageFolder (slow) on every request. Classes are fixed after training.
-        from src.dataset import get_transforms
-        from torchvision import datasets
-        app.state.class_names = datasets.ImageFolder(config.TRAIN_DIR).classes
+        app.state.class_names = get_class_names(config.CLASS_NAMES_PATH, config.TRAIN_DIR)
         logging.info(f"Model loaded successfully. {len(app.state.class_names)} classes.")
     except FileNotFoundError:
         logging.warning(
             "No model checkpoint found. "
             "Run src/train.py first. /predict will return errors until model is ready."
         )
+        app.state.model       = None
+        app.state.device      = device
+        app.state.class_names = []
+    except Exception:
+        # WHY catch-all (not just FileNotFoundError): a present-but-invalid
+        # checkpoint (e.g. an unresolved Git LFS pointer) raises things like
+        # UnpicklingError, not FileNotFoundError. Left uncaught, that exception
+        # aborts the whole ASGI startup — the app never binds its port, and
+        # platform health checks just see "connection refused" with no clue why.
+        # logging.exception() records the full traceback so the real cause is
+        # visible in the deploy logs, while the service still starts in a
+        # degraded (model=None) state instead of crashing outright.
+        logging.exception("Model failed to load — serving in degraded mode (no predictions).")
         app.state.model       = None
         app.state.device      = device
         app.state.class_names = []

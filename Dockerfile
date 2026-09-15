@@ -19,7 +19,21 @@ RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/c
 COPY config.py .
 COPY app/ app/
 COPY src/ src/
-COPY experiments/ experiments/
+COPY experiments/class_names.json experiments/class_names.json
+
+# WHY download the checkpoint instead of `COPY experiments/`: DigitalOcean App
+# Platform's own git fetch of this repo does not resolve Git LFS, so a plain
+# COPY would silently ship the ~130-byte LFS *pointer* text instead of the real
+# ~108MB weights (that's exactly what caused the app to crash on startup with
+# a bare UnpicklingError and never bind its port). GitHub serves the real LFS
+# object content over plain HTTPS via media.githubusercontent.com regardless
+# of whether the fetching tool understands LFS — see "Checkpoint delivery" in
+# README.md. validate_checkpoint_file() then fails the BUILD loudly (not the
+# deploy) if what we got is missing, truncated, or still an LFS pointer.
+ARG CHECKPOINT_URL=https://media.githubusercontent.com/media/adikoren/plant-disease-detection-pytorch/deploy/digitalocean-live/experiments/best_model.pth
+RUN python -c "import urllib.request; urllib.request.urlretrieve('${CHECKPOINT_URL}', 'experiments/best_model.pth')" \
+    && python -c "from src.utils import validate_checkpoint_file; validate_checkpoint_file('experiments/best_model.pth')" \
+    && echo "Checkpoint OK: $(stat -c%s experiments/best_model.pth 2>/dev/null || stat -f%z experiments/best_model.pth) bytes"
 
 # WHY pre-fetch here: model.py and inference.py's OOD detector both construct
 # torchvision models with pretrained ImageNet weights. Baking those weights

@@ -6,11 +6,40 @@ device-agnostic code, reliable checkpointing, and persistent logging.
 These helpers are imported by every other module — built first, depended upon by all.
 """
 
+import json
 import os
 import random
 import logging
+from typing import List
+
 import torch
 import numpy as np
+
+
+def get_class_names(class_names_path: str, train_dir: str) -> List[str]:
+    """
+    Resolve the ordered list of class names the checkpoint was trained with.
+
+    WHY a JSON sidecar first: the training dataset (train_dir) is intentionally
+    never shipped to production, so serving can't depend on scanning it via
+    ImageFolder. class_names_path is a small, git-tracked file generated once
+    from the real training data, kept in lockstep with the checkpoint.
+
+    Falls back to scanning train_dir via ImageFolder when the sidecar isn't
+    present, so local development still works before the file is generated.
+    """
+    if os.path.exists(class_names_path):
+        with open(class_names_path) as f:
+            return json.load(f)
+
+    if os.path.exists(train_dir):
+        from torchvision import datasets
+        return datasets.ImageFolder(train_dir).classes
+
+    raise FileNotFoundError(
+        f"No class names available: neither '{class_names_path}' nor "
+        f"'{train_dir}' exists."
+    )
 
 
 def set_seed(seed: int = 42) -> None:
@@ -90,6 +119,44 @@ def save_checkpoint(
     logging.info(f"Checkpoint saved → {path}  (epoch={epoch}, val_acc={val_acc:.4f})")
 
 
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+_MIN_CHECKPOINT_BYTES = 10 * 1024 * 1024  # real checkpoint is 100MB+; an LFS pointer is ~130 bytes.
+
+
+def validate_checkpoint_file(path: str) -> None:
+    """
+    Guard against a missing/corrupted/unresolved checkpoint before torch.load() runs.
+
+    WHY: DigitalOcean App Platform's git fetch does not resolve Git LFS, so a
+    naive copy of this file into a container build can silently ship a ~130-byte
+    LFS pointer text file instead of the real 100MB+ weights. torch.load() on
+    that pointer fails deep inside model loading with a cryptic UnpicklingError —
+    this check catches the real problem immediately with an actionable message.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Checkpoint not found at '{path}'. "
+            "Run train.py first to generate a model checkpoint."
+        )
+
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        head = f.read(64)
+
+    if head.startswith(_LFS_POINTER_PREFIX):
+        raise RuntimeError(
+            f"'{path}' is a Git LFS pointer file ({size} bytes), not the real "
+            "checkpoint — the LFS object was never downloaded. "
+            "See 'Checkpoint delivery' in README.md."
+        )
+
+    if size < _MIN_CHECKPOINT_BYTES:
+        raise RuntimeError(
+            f"'{path}' is suspiciously small ({size} bytes) to be a real model "
+            "checkpoint (expected 100MB+). It may be truncated or corrupted."
+        )
+
+
 def load_checkpoint(
     model: torch.nn.Module,
     path: str,
@@ -112,12 +179,9 @@ def load_checkpoint(
 
     Raises:
         FileNotFoundError: If the checkpoint file does not exist.
+        RuntimeError: If the file exists but is an LFS pointer or looks truncated.
     """
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Checkpoint not found at '{path}'. "
-            "Run train.py first to generate a model checkpoint."
-        )
+    validate_checkpoint_file(path)
 
     # WHY map_location='cpu': loads safely on any device, then .to(device) moves it.
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)

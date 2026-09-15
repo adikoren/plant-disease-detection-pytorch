@@ -22,8 +22,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from src.inference import load_model, predict
-from src.utils import get_device
-from torchvision import datasets
+from src.utils import get_class_names, get_device
 
 
 def _load_resources():
@@ -33,11 +32,14 @@ def _load_resources():
     WHY cache at module level: when Gradio is mounted into FastAPI, this module
     is imported once. Caching avoids reloading the model on every prediction call.
     """
-    device      = get_device()
-    class_names = datasets.ImageFolder(config.TRAIN_DIR).classes if os.path.exists(config.TRAIN_DIR) else []
+    device = get_device()
+    try:
+        class_names = get_class_names(config.CLASS_NAMES_PATH, config.TRAIN_DIR)
+    except FileNotFoundError:
+        class_names = []
     try:
         model = load_model(config.BEST_MODEL_PATH, num_classes=config.NUM_CLASSES, device=device)
-    except FileNotFoundError:
+    except (FileNotFoundError, RuntimeError):
         model = None
     return model, class_names, device
 
